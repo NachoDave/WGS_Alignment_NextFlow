@@ -4,12 +4,13 @@
 
 //projectDir = ""
 
-params.reads = '/data/DaveJames/nextflow/RNASeqTutorial/training/nf-training/data/ggal/*_{1,2}.fq'
+params.reads = '/data/DaveJames/nextflow/RNASeqTutorial/training/nf-training/data/ggal/gut_{1,2}.fq'
 params.genome = ""
 
 params.outdir = "$projectDir/results/"
-params.adaptorfile = "$projectDir/ExampleData/adaptors.fa"
-
+params.adaptorfile = "/data/genomes/GCF_000001405.40_BWA_MEM2_Index/adaptors.fa"
+params.genomefile = "/data/genomes/GCF_000001405.40_BWA_MEM2_Index/"
+params.genomeid = "GCF_000001405.40_GRCh38.p14_genomic.fna"
 log.info """\
 
     RBGO WES/WGS -NF PIPELINE
@@ -41,6 +42,7 @@ process FASTQC {
 
 
 }
+
 
 process SCYTHE {
 
@@ -91,15 +93,26 @@ process SICKLE {
 
 }
 
-//process BWA_MEM2 {
-  //  container 'dceoy/bwa-mem2'
-   // input:
-   // tuple val(sample_id), path(reads)
+process BWA_MEM2 {
+    cpus 4
+
+    container 'rbgo/bwa-mem2:2.2.1_v1'
+    input:
+    tuple val(sample_id), path(reads)
+    path(genome)
+    val genomeid
+
+    output:
+    tuple val(sample_id), path("${sample_id}.sam")
+
+    script:
+    """
+    bwa-mem2 mem -t 4 ${genome}/$genomeid ${reads[0]} ${reads[1]} > ${sample_id}.sam
+
+    """
 
 
-
-
-//}
+}
 
 workflow {
     Channel
@@ -112,4 +125,8 @@ workflow {
     scythe_ch.view()
     sickle_ch = SICKLE(scythe_ch)
     sickle_ch.view()
+    bwa_ch = BWA_MEM2(sickle_ch, params.genomefile, params.genomeid)
+    bwa_ch.view()
+    
+
 }
