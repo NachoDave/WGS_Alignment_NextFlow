@@ -4,7 +4,7 @@
 
 //projectDir = ""
 
-params.reads = '/data/DaveJames/nextflow/RNASeqTutorial/training/nf-training/data/ggal/gut_{1,2}.fq'
+params.reads = '/data/DaveJames/nextflow/RNASeqTutorial/training/nf-training/data/ggal/*_{1,2}.fq'
 params.genome = ""
 
 params.outdir = "$projectDir/results/"
@@ -114,6 +114,25 @@ process BWA_MEM2 {
 
 }
 
+process SAM2BAM {
+    cpus 4
+
+    container 'biocontainers/samtools:v1.7.0_cv3'
+    input:
+    tuple val(sample_id), path(reads) 
+
+    output:
+    tuple val(sample_id), path("${sample_id}_sorted.bam")
+
+    script:
+    """
+    samtools view -S -b ${reads[0]} | samtools sort -@ 10 -m 5G > ${sample_id}_sorted.bam 
+    samtools index -@ 12 ${sample_id}_sorted.bam
+
+    """
+
+}
+
 workflow {
     Channel
         .fromFilePairs(params.reads, checkIfExists: true)
@@ -127,6 +146,7 @@ workflow {
     sickle_ch.view()
     bwa_ch = BWA_MEM2(sickle_ch, params.genomefile, params.genomeid)
     bwa_ch.view()
-    
+    samtools_ch=SAM2BAM(bwa_ch)
+    samtools_ch.view()
 
 }
