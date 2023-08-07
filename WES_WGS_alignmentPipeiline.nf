@@ -7,7 +7,7 @@
 params.reads = '/data/DaveJames/nextflow/RNASeqTutorial/training/nf-training/data/ggal/*_{1,2}.fq'
 params.genome = ""
 
-params.outdir = "$projectDir/results/"
+params.outdir = "/data/DaveJames/nextflow/WGS_pipeline/results/"
 params.adaptorfile = "/data/genomes/GCF_000001405.40_BWA_MEM2_Index/adaptors.fa"
 params.genomefile = "/data/genomes/GCF_000001405.40_BWA_MEM2_Index/"
 params.genomeid = "GCF_000001405.40_GRCh38.p14_genomic.fna"
@@ -133,13 +133,34 @@ process SAM2BAM {
 
 }
 
+
+process MARK_DUPLICATES {
+    cpus 4
+    publishDir params.outdir, mode:'move'
+
+    container 'broadinstitute/gatk:latest' 
+    input:
+    tuple val(sample_id), path(reads)
+
+    output:
+    path "${sample_id}_MarkedDup.bam"
+    path "${sample_id}_MarkedDuplicates.txt"
+
+    script:
+    """
+    gatk MarkDuplicates I=${reads[0]} O=${sample_id}_MarkedDup.bam M=${sample_id}_MarkedDuplicates.txt
+
+    """   
+
+}
+
 workflow {
     Channel
         .fromFilePairs(params.reads, checkIfExists: true)
         .view()
          .set { read_pairs_ch }
     
-//fastqc_ch = FASTQC(read_pairs_ch)    
+    fastqc_ch = FASTQC(read_pairs_ch)    
     scythe_ch = SCYTHE(params.adaptorfile, read_pairs_ch)
     scythe_ch.view()
     sickle_ch = SICKLE(scythe_ch)
@@ -148,5 +169,6 @@ workflow {
     bwa_ch.view()
     samtools_ch=SAM2BAM(bwa_ch)
     samtools_ch.view()
-
+    picard_ch=MARK_DUPLICATES(samtools_ch)
+    //picard_ch.view()
 }
