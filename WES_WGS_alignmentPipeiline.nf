@@ -25,16 +25,21 @@ reads : ${params.reads}
 */
 
 process FASTQC {
+    
+    publishDir "${results}/fastqc", mode:'move'
     container 'rbgo/fastqc:0.12.0'
 
     input:
     tuple val(sample_id), path(reads)
+    path results
+
 
     output:
     path "fastqc_${sample_id}_logs"
 
     script:
     """
+    mkdir -p ${results}/fastqc
     mkdir fastqc_${sample_id}_logs
     fastqc -o fastqc_${sample_id}_logs -f fastq -q ${reads}
 
@@ -123,11 +128,10 @@ process SAM2BAM {
 
     output:
     tuple val(sample_id), path("${sample_id}_sorted.bam")
-
+    //tuple val(sample_id), path("$")
     script:
     """
     samtools view -S -b ${reads[0]} | samtools sort -@ 10 -m 5G > ${sample_id}_sorted.bam 
-    samtools index -@ 12 ${sample_id}_sorted.bam
 
     """
 
@@ -141,10 +145,9 @@ process MARK_DUPLICATES {
     container 'broadinstitute/gatk:latest' 
     input:
     tuple val(sample_id), path(reads)
-
     output:
-    path "${sample_id}_MarkedDup.bam"
-    path "${sample_id}_MarkedDuplicates.txt"
+    path "${sample_id}_MarkedDup.bam" 
+   path "${sample_id}_MarkedDuplicates.txt"
 
     script:
     """
@@ -154,13 +157,36 @@ process MARK_DUPLICATES {
 
 }
 
+process INDEXBAM {
+    
+    publishDir params.outdir, mode:'move'
+    container 'biocontainers/samtools:v1.7.0_cv3'
+    input:
+    tuple val(sample_id), path(reads)
+    path outDir    
+    path bam
+    path txt
+    //output:
+    
+    //path "${sample_id}_MarkedDup.bam.bai"
+
+
+    script:
+    """
+    
+    samtools index -@ 12 ${outDir}/${sample_id}_MarkedDup.bam
+
+    """
+
+}
+
 workflow {
     Channel
         .fromFilePairs(params.reads, checkIfExists: true)
         .view()
          .set { read_pairs_ch }
     
-    fastqc_ch = FASTQC(read_pairs_ch)    
+    fastqc_ch = FASTQC(read_pairs_ch, params.outdir)    
     scythe_ch = SCYTHE(params.adaptorfile, read_pairs_ch)
     scythe_ch.view()
     sickle_ch = SICKLE(scythe_ch)
@@ -170,5 +196,6 @@ workflow {
     samtools_ch=SAM2BAM(bwa_ch)
     samtools_ch.view()
     picard_ch=MARK_DUPLICATES(samtools_ch)
-    //picard_ch.view()
+//    picard_ch.view()
+    indexbam_ch=INDEXBAM(samtools_ch,params.outdir,picard_ch)
 }
