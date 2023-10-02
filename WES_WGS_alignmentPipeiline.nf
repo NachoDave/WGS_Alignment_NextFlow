@@ -5,12 +5,11 @@
 //projectDir = ""
 
 params.reads = '/data/DaveJames/nextflow/RNASeqTutorial/training/nf-training/data/ggal/*_{1,2}.fq'
-params.genome = ""
-
 params.outdir = "/data/DaveJames/nextflow/WGS_pipeline/results/"
 params.adaptorfile = "/data/genomes/GCF_000001405.40_BWA_MEM2_Index/adaptors.fa"
-params.genomefile = "/data/genomes/GCF_000001405.40_BWA_MEM2_Index/"
-params.genomeid = "GCF_000001405.40_GRCh38.p14_genomic.fna"
+params.genomefile = "/data/genomes/G38_BROAD_150823/"
+params.genomeid = "resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta"
+
 log.info """\
 
     RBGO WES/WGS -NF PIPELINE
@@ -26,7 +25,7 @@ reads : ${params.reads}
 
 process FASTQC {
     
-    publishDir "${results}/fastqc", mode:'move'
+    publishDir params.outdir, mode: 'copy' 
     container 'rbgo/fastqc:0.12.0'
 
     input:
@@ -39,10 +38,9 @@ process FASTQC {
 
     script:
     """
-    mkdir -p ${results}/fastqc
     mkdir fastqc_${sample_id}_logs
     fastqc -o fastqc_${sample_id}_logs -f fastq -q ${reads}
-
+    
     """
 
 
@@ -50,7 +48,7 @@ process FASTQC {
 
 
 process SCYTHE {
-
+    cpus 4
     container 'sickle_scythe_dj'
 
     input:
@@ -58,7 +56,7 @@ process SCYTHE {
     tuple val(sample_id), path(reads)
 
     output:
-    tuple val(sample_id), path("${sample_id}_Scythe{1,2}.fq")
+    tuple val(sample_id), path("${sample_id}_Scythe{1,2}.fq.gz")
     
     script:
     """
@@ -71,18 +69,23 @@ process SCYTHE {
     -o ${sample_id}_Scythe2.fq \
     -m ${sample_id}_matches2.txt \
     ${reads[1]}
+
+    gzip  ${sample_id}_Scythe2.fq
+    gzip ${sample_id}_Scythe1.fq
+
     """
+
 
 }
 
 process SICKLE {
-
+    cpus 4
     container 'sickle_scythe_dj'
     input:
     tuple val(sample_id), path(reads)
 
     output:
-    tuple val(sample_id), path("${sample_id}_ScytheSickle{1,2}.fq")
+    tuple val(sample_id), path("${sample_id}_ScytheSickle{1,2}.fq.gz")
 
     script:
     """
@@ -93,13 +96,16 @@ process SICKLE {
     -p  ${sample_id}_ScytheSickle2.fq \
     -s ${sample_id}_ScytheSickle_LowQCreads.fq -t sanger 
 
+    gzip ${sample_id}_ScytheSickle1.fq
+    gzip ${sample_id}_ScytheSickle2.fq
+    gzip ${sample_id}_ScytheSickle_LowQCreads.fq
     """
 
 
 }
 
 process BWA_MEM2 {
-    cpus 4
+    cpus 8 
 
     container 'rbgo/bwa-mem2:2.2.1_v1'
     input:
@@ -120,8 +126,8 @@ process BWA_MEM2 {
 }
 
 process SAM2BAM {
-    cpus 4
-
+    cpus 9
+    //memory '20 GB'
     container 'biocontainers/samtools:v1.7.0_cv3'
     input:
     tuple val(sample_id), path(reads) 
@@ -131,7 +137,8 @@ process SAM2BAM {
     //tuple val(sample_id), path("$")
     script:
     """
-    samtools view -S -b ${reads[0]} | samtools sort -@ 10 -m 5G > ${sample_id}_sorted.bam 
+    samtools view -S -b ${reads[0]} > ${sample_id}.bam 
+    samtools sort -@ 4 ${sample_id}.bam > ${sample_id}_sorted.bam 
 
     """
 
@@ -139,7 +146,7 @@ process SAM2BAM {
 
 
 process MARK_DUPLICATES {
-    cpus 4
+    cpus 10
     publishDir params.outdir, mode:'move'
 
     container 'broadinstitute/gatk:latest' 
@@ -147,11 +154,11 @@ process MARK_DUPLICATES {
     tuple val(sample_id), path(reads)
     output:
     path "${sample_id}_MarkedDup.bam" 
-   path "${sample_id}_MarkedDuplicates.txt"
-
+    path "${sample_id}_MarkedDuplicates.txt"
+    path "${sample_id}_MarkedDup.bai"
     script:
     """
-    gatk MarkDuplicates I=${reads[0]} O=${sample_id}_MarkedDup.bam M=${sample_id}_MarkedDuplicates.txt
+    gatk MarkDuplicates I=${reads[0]} O=${sample_id}_MarkedDup.bam M=${sample_id}_MarkedDuplicates.txt CREATE_INDEX=true 
 
     """   
 
@@ -180,6 +187,27 @@ process INDEXBAM {
 
 }
 
+process ADDREADGROUPS {
+
+    container 'broadinstitute/gatk:latest' 
+    input:
+    tuple val(sample_id), path(reads)
+
+    output:
+    
+    tuple val(sample_id), path("${sample_id}_RG.bam")
+
+    script:
+    """
+
+    gatk AddOrReplaceReadGroups I=${reads} O=${sample_id}_RG.bam RGLB=lib1 RGPL=illumina RGPU=unit1 RGSM=20
+
+
+    """
+
+ 
+}
+
 workflow {
     Channel
         .fromFilePairs(params.reads, checkIfExists: true)
@@ -188,14 +216,15 @@ workflow {
     
     fastqc_ch = FASTQC(read_pairs_ch, params.outdir)    
     scythe_ch = SCYTHE(params.adaptorfile, read_pairs_ch)
-    scythe_ch.view()
+    //scythe_ch.view()
     sickle_ch = SICKLE(scythe_ch)
-    sickle_ch.view()
+    //sickle_ch.view()
     bwa_ch = BWA_MEM2(sickle_ch, params.genomefile, params.genomeid)
-    bwa_ch.view()
+    //bwa_ch.view()
     samtools_ch=SAM2BAM(bwa_ch)
-    samtools_ch.view()
-    picard_ch=MARK_DUPLICATES(samtools_ch)
+    addreadgroups_ch=ADDREADGROUPS(samtools_ch)
+    //samtools_ch.view()
+    picard_ch=MARK_DUPLICATES(addreadgroups_ch)
 //    picard_ch.view()
-    indexbam_ch=INDEXBAM(samtools_ch,params.outdir,picard_ch)
+//    indexbam_ch=INDEXBAM(samtools_ch,params.outdir,picard_ch)
 }
